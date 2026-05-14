@@ -1,18 +1,23 @@
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import path from "path";
 import fs from "fs/promises";
-import { hasActiveSession, getSessionDir } from "./session-manager";
+import {
+  hasActiveSession,
+  getSessionDir,
+  getSessionType,
+  getCdpPort,
+} from "./session-manager";
 
-let browserInstance: Browser | null = null;
+let headlessBrowser: Browser | null = null;
 
 async function getHeadlessBrowser(): Promise<Browser> {
-  if (!browserInstance || !browserInstance.isConnected()) {
-    browserInstance = await chromium.launch({
+  if (!headlessBrowser || !headlessBrowser.isConnected()) {
+    headlessBrowser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
   }
-  return browserInstance;
+  return headlessBrowser;
 }
 
 export interface ScreenshotOptions {
@@ -23,7 +28,7 @@ export interface ScreenshotOptions {
   cookies?: Array<{ name: string; value: string; domain: string; path: string }>;
   width?: number;
   height?: number;
-  /** When provided, uses the saved persistent session for this integration (if one exists). */
+  /** When provided, uses the saved session for this integration (CDP or persistent). */
   integrationId?: string;
 }
 
@@ -35,18 +40,57 @@ export async function takeScreenshot(
   await fs.mkdir(screenshotDir, { recursive: true });
   const filePath = path.join(screenshotDir, options.filename);
 
-  // Use saved persistent session if one exists for this integration
-  const usePersistentSession =
-    options.integrationId && (await hasActiveSession(options.integrationId));
-
-  if (usePersistentSession && options.integrationId) {
-    return takeScreenshotWithSession(url, options, filePath);
+  if (options.integrationId && (await hasActiveSession(options.integrationId))) {
+    const type = await getSessionType(options.integrationId);
+    if (type === "cdp") {
+      return takeScreenshotViaCDP(url, options, filePath);
+    }
+    return takeScreenshotWithPersistentSession(url, options, filePath);
   }
 
   return takeScreenshotFresh(url, options, filePath);
 }
 
-async function takeScreenshotWithSession(
+/** Connect to the user's already-running browser via Chrome DevTools Protocol. */
+async function takeScreenshotViaCDP(
+  url: string,
+  options: ScreenshotOptions,
+  filePath: string
+): Promise<{ buffer: Buffer; filePath: string }> {
+  const port = await getCdpPort(options.integrationId!);
+  const cdpUrl = `http://localhost:${port}`;
+
+  const browser = await chromium.connectOverCDP(cdpUrl);
+  let page;
+
+  try {
+    // Prefer an existing context (carries the live session cookies)
+    const contexts = browser.contexts();
+    const context = contexts[0] ?? (await browser.newContext());
+
+    page = await context.newPage();
+    await page.setViewportSize({
+      width: options.width ?? 1440,
+      height: options.height ?? 900,
+    });
+    await page.goto(url, { waitUntil: "networkidle", timeout: 45000 });
+
+    if (options.waitForSelector) {
+      await page.waitForSelector(options.waitForSelector, { timeout: 10000 }).catch(() => {});
+    }
+
+    const buffer = await page.screenshot({ path: filePath, fullPage: options.fullPage ?? true });
+    return { buffer: buffer as Buffer, filePath };
+  } finally {
+    if (page) await page.close();
+    // Do NOT call browser.close() — that would close the user's real browser.
+    // close() on a CDP-connected browser disconnects Playwright without killing Chrome
+    await browser.close();
+  }
+}
+
+/** Use a saved Playwright persistent context (cookies stored on disk). */
+async function takeScreenshotWithPersistentSession(
   url: string,
   options: ScreenshotOptions,
   filePath: string
@@ -55,7 +99,6 @@ async function takeScreenshotWithSession(
   let context: BrowserContext | null = null;
 
   try {
-    // launchPersistentContext restores cookies/localStorage from the saved session
     context = await chromium.launchPersistentContext(sessionDir, {
       headless: true,
       viewport: { width: options.width ?? 1440, height: options.height ?? 900 },
@@ -76,6 +119,7 @@ async function takeScreenshotWithSession(
   }
 }
 
+/** Fresh headless browser with no session (public URLs only). */
 async function takeScreenshotFresh(
   url: string,
   options: ScreenshotOptions,
@@ -89,7 +133,7 @@ async function takeScreenshotFresh(
       viewport: { width: options.width ?? 1440, height: options.height ?? 900 },
     });
 
-    if (options.cookies && options.cookies.length > 0) {
+    if (options.cookies?.length) {
       await context.addCookies(options.cookies);
     }
 
@@ -107,9 +151,23 @@ async function takeScreenshotFresh(
   }
 }
 
+/** Test whether a Chrome CDP endpoint is reachable. */
+export async function testCDPConnection(port: number): Promise<boolean> {
+  try {
+    const browser = await chromium.connectOverCDP(`http://localhost:${port}`, {
+      timeout: 3000,
+    });
+    // close() on a CDP-connected browser disconnects Playwright without killing Chrome
+    await browser.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function closeBrowser(): Promise<void> {
-  if (browserInstance) {
-    await browserInstance.close();
-    browserInstance = null;
+  if (headlessBrowser) {
+    await headlessBrowser.close();
+    headlessBrowser = null;
   }
 }
