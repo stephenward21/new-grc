@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { BrowserSessionCard } from "@/components/integrations/browser-session-card";
 import { ArrowLeft, Plus, Radio } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -50,7 +51,7 @@ export default async function IntegrationDetailPage({
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-1">
+        <div className="space-y-4 lg:col-span-1">
           <Card>
             <CardHeader>
               <CardTitle>Details</CardTitle>
@@ -75,6 +76,11 @@ export default async function IntegrationDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          <BrowserSessionCard
+            integrationId={integration.id}
+            integrationType={meta?.label ?? integration.type}
+          />
         </div>
 
         <div className="lg:col-span-2">

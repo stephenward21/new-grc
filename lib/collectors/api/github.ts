@@ -188,6 +188,7 @@ export class GithubCollector extends BaseCollector {
       runId,
       filename,
       fullPage: true,
+      integrationId: this.config.integrationId,
     });
 
     return {

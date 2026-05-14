@@ -206,6 +206,7 @@ export class AwsCollector extends BaseCollector {
       runId,
       filename: target.filename,
       fullPage: true,
+      integrationId: this.config.integrationId,
     });
 
     return {
