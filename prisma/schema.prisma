@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// IntegrationType values: GITHUB | AWS | JIRA
+// CollectorMethod values: API | SCREENSHOT
+// RunStatus values: PENDING | RUNNING | SUCCESS | FAILED
+// ArtifactType values: JSON | CSV | IMAGE | TEXT
+
+model Integration {
+  id          String      @id @default(cuid())
+  name        String
+  type        String      // GITHUB | AWS | JIRA
+  credentials String      // JSON serialized
+  createdAt   DateTime    @default(now())
+  collectors  Collector[]
+}
+
+model Collector {
+  id            String    @id @default(cuid())
+  name          String
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  evidenceType  String
+  method        String    // API | SCREENSHOT
+  config        String    // JSON serialized
+  schedule      String?
+  lastRunAt     DateTime?
+  createdAt     DateTime  @default(now())
+  runs          Run[]
+}
+
+model Run {
+  id          String     @id @default(cuid())
+  collectorId String
+  collector   Collector  @relation(fields: [collectorId], references: [id], onDelete: Cascade)
+  status      String     @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED
+  startedAt   DateTime   @default(now())
+  completedAt DateTime?
+  error       String?
+  artifacts   Artifact[]
+}
+
+model Artifact {
+  id          String   @id @default(cuid())
+  runId       String
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type        String   // JSON | CSV | IMAGE | TEXT
+  filename    String
+  content     Bytes
+  mimeType    String
+  createdAt   DateTime @default(now())
+  controlTags String   @default("[]") // JSON serialized string array
+}
