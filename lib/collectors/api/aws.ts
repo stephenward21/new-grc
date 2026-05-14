@@ -1,6 +1,7 @@
 import { BaseCollector } from "../base";
 import { takeScreenshot } from "../screenshot/browser";
 import { awsFetch } from "../../aws-sigv4";
+import { getAWSConsoleSigninUrl } from "../screenshot/aws-console-auth";
 import type { CollectionResult, EvidenceTypeDefinition } from "../types";
 
 export const AWS_EVIDENCE_TYPES: EvidenceTypeDefinition[] = [
@@ -202,11 +203,22 @@ export class AwsCollector extends BaseCollector {
     const target = urlMap[evidenceType];
     if (!target) throw new Error(`Unknown AWS evidence type: ${evidenceType}`);
 
-    const { buffer, filePath } = await takeScreenshot(target.url, {
+    // Generate a one-time federated sign-in URL so Playwright lands in an
+    // authenticated console session without needing a stored browser session.
+    const signinUrl = await getAWSConsoleSigninUrl(
+      {
+        accessKeyId: this.params.accessKeyId ?? this.credentials.accessKeyId,
+        secretAccessKey: this.params.secretAccessKey ?? this.credentials.secretAccessKey,
+        region,
+      },
+      target.url
+    );
+
+    const { buffer, filePath } = await takeScreenshot(signinUrl, {
       runId,
       filename: target.filename,
       fullPage: true,
-      integrationId: this.config.integrationId,
+      // No integrationId needed — federation handles auth, no saved session required
     });
 
     return {

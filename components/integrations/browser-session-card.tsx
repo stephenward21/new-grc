@@ -4,9 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Monitor, Loader2, Unplug, RefreshCw, Square } from "lucide-react";
+import { Monitor, Loader2, Unplug, RefreshCw, Zap } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface Props {
@@ -18,27 +16,17 @@ type SessionState =
   | { status: "loading" }
   | { status: "disconnected" }
   | { status: "connecting"; message: string }
-  | { status: "connected"; lastAuthAt: string; type: "cdp" | "persistent"; cdpPort?: number };
-
-type ConnectMode = "cdp" | "persistent";
+  | { status: "connected"; lastAuthAt: string };
 
 export function BrowserSessionCard({ integrationId, integrationType }: Props) {
   const [session, setSession] = useState<SessionState>({ status: "loading" });
-  const [mode, setMode] = useState<ConnectMode>("cdp");
-  const [cdpPort, setCdpPort] = useState("9222");
-  const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`/api/integrations/${integrationId}/auth-session`);
       const data = await res.json();
       if (data.authenticated) {
-        setSession({
-          status: "connected",
-          lastAuthAt: data.lastAuthAt,
-          type: data.type ?? "persistent",
-          cdpPort: data.cdpPort,
-        });
+        setSession({ status: "connected", lastAuthAt: data.lastAuthAt });
       } else {
         setSession((prev) =>
           prev.status === "connecting" ? prev : { status: "disconnected" }
@@ -53,7 +41,7 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
     fetchStatus();
   }, [fetchStatus]);
 
-  // Poll while connecting via persistent session (waiting for user to log in)
+  // Poll while waiting for the user to log in in the opened window
   useEffect(() => {
     if (session.status !== "connecting") return;
     const interval = setInterval(fetchStatus, 3000);
@@ -61,37 +49,20 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
   }, [session.status, fetchStatus]);
 
   async function handleConnect() {
-    setError(null);
-    setSession({ status: "connecting", message: "Connecting…" });
-
+    setSession({ status: "connecting", message: "Opening browser window…" });
     try {
       const res = await fetch(`/api/integrations/${integrationId}/auth-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          mode === "cdp"
-            ? { type: "cdp", port: parseInt(cdpPort, 10) || 9222 }
-            : { type: "persistent" }
-        ),
+        body: JSON.stringify({ type: "persistent" }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.message ?? "Connection failed.");
-        setSession({ status: "disconnected" });
-        return;
-      }
-
-      if (data.status === "connected") {
-        // CDP connected immediately
-        await fetchStatus();
-      } else {
-        // Persistent: waiting for user to log in in the opened window
+      if (res.ok) {
         setSession({ status: "connecting", message: data.message });
+      } else {
+        setSession({ status: "disconnected" });
       }
     } catch {
-      setError("Failed to reach the server.");
       setSession({ status: "disconnected" });
     }
   }
@@ -99,7 +70,30 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
   async function handleDisconnect() {
     await fetch(`/api/integrations/${integrationId}/auth-session`, { method: "DELETE" });
     setSession({ status: "disconnected" });
-    setError(null);
+  }
+
+  // AWS uses federation — no browser session setup needed
+  if (integrationType === "AWS") {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-teal-400" />
+            Browser Session
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm">
+          <div className="rounded-lg border border-teal-800 bg-teal-900/20 px-3 py-2 text-teal-300">
+            AWS screenshots use your stored credentials to generate a temporary
+            federated sign-in URL automatically — no session setup required.
+          </div>
+          <p className="mt-3 text-xs text-zinc-500">
+            Requires the IAM user to have{" "}
+            <code className="text-zinc-400">sts:GetFederationToken</code> permission.
+          </p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -118,7 +112,7 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
       <CardContent className="space-y-4 text-sm">
         <p className="text-zinc-400">
           Required for screenshot collectors to capture authenticated{" "}
-          {integrationType} console pages.
+          {integrationType} pages.
         </p>
 
         {session.status === "loading" && (
@@ -131,11 +125,7 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
         {session.status === "connected" && (
           <div className="space-y-3">
             <div className="rounded-lg border border-teal-800 bg-teal-900/20 px-3 py-2 text-teal-300">
-              {session.type === "cdp" ? (
-                <>Using live Chrome session on port {session.cdpPort ?? 9222}</>
-              ) : (
-                <>Session active — screenshots use your saved browser profile.</>
-              )}
+              Session active — screenshots will use your saved browser profile.
             </div>
             <div className="flex items-center justify-between text-xs text-zinc-500">
               <span>
@@ -163,94 +153,17 @@ export function BrowserSessionCard({ integrationId, integrationType }: Props) {
                 <span>{session.message}</span>
               </div>
             </div>
-            {mode === "persistent" && (
-              <p className="text-xs text-zinc-500">
-                Log in to {integrationType} in the browser window. This card updates automatically.
-              </p>
-            )}
+            <p className="text-xs text-zinc-500">
+              Log in to {integrationType} in the browser window. This card updates automatically.
+            </p>
           </div>
         )}
 
         {session.status === "disconnected" && (
-          <div className="space-y-4">
-            {/* Mode toggle */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => { setMode("cdp"); setError(null); }}
-                className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors ${
-                  mode === "cdp"
-                    ? "border-teal-600 bg-teal-950/30"
-                    : "border-zinc-700 hover:border-zinc-600"
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-medium text-zinc-200">
-                  <Monitor className="h-3.5 w-3.5" />
-                  Current Browser
-                </div>
-                <p className="text-xs text-zinc-500">
-                  Use your open {integrationType} session — no extra login
-                </p>
-              </button>
-              <button
-                onClick={() => { setMode("persistent"); setError(null); }}
-                className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors ${
-                  mode === "persistent"
-                    ? "border-teal-600 bg-teal-950/30"
-                    : "border-zinc-700 hover:border-zinc-600"
-                }`}
-              >
-                <div className="flex items-center gap-1.5 font-medium text-zinc-200">
-                  <Square className="h-3.5 w-3.5" />
-                  New Window
-                </div>
-                <p className="text-xs text-zinc-500">
-                  Open a browser window and log in manually
-                </p>
-              </button>
-            </div>
-
-            {/* CDP setup instructions */}
-            {mode === "cdp" && (
-              <div className="space-y-3">
-                <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3 text-xs text-zinc-400 space-y-2">
-                  <p className="font-medium text-zinc-300">One-time Chrome setup</p>
-                  <p>Quit Chrome, then relaunch it with the remote debugging flag:</p>
-                  <code className="block rounded bg-zinc-900 px-2 py-1.5 text-teal-400 break-all">
-                    {`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222`}
-                  </code>
-                  <p>Or on Windows:</p>
-                  <code className="block rounded bg-zinc-900 px-2 py-1.5 text-teal-400 break-all">
-                    {`chrome.exe --remote-debugging-port=9222`}
-                  </code>
-                  <p className="text-zinc-500">
-                    Your existing tabs and sessions are preserved — Chrome starts normally with this flag.
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="cdp-port">Remote debugging port</Label>
-                  <Input
-                    id="cdp-port"
-                    value={cdpPort}
-                    onChange={(e) => setCdpPort(e.target.value)}
-                    placeholder="9222"
-                    className="font-mono"
-                  />
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="rounded-lg border border-red-800 bg-red-900/20 px-3 py-2 text-xs text-red-400">
-                {error}
-              </div>
-            )}
-
-            <Button onClick={handleConnect} className="w-full">
-              <Monitor className="mr-2 h-4 w-4" />
-              {mode === "cdp" ? "Connect to Current Browser" : "Open Login Window"}
-            </Button>
-          </div>
+          <Button onClick={handleConnect} className="w-full">
+            <Monitor className="mr-2 h-4 w-4" />
+            Connect Browser Session
+          </Button>
         )}
       </CardContent>
     </Card>
